@@ -14,7 +14,19 @@ class OrganizationQuerySet(models.QuerySet):
 
         :type root_org_id: int
         """
-        return self.filter()
+
+        query = '''
+                WITH RECURSIVE children (id) AS (
+                SELECT orgunits_organization.id FROM orgunits_organization WHERE id = %s
+                UNION ALL
+                SELECT orgunits_organization.id FROM children, orgunits_organization
+                WHERE orgunits_organization.parent_id = children.id
+                )
+                SELECT orgunits_organization.id
+                FROM orgunits_organization, children WHERE children.id = orgunits_organization.id
+                '''
+
+        return self.filter(pk__in=RawSQL(query, [root_org_id]))
 
     def tree_upwards(self, child_org_id):
         """
@@ -23,7 +35,24 @@ class OrganizationQuerySet(models.QuerySet):
 
         :type child_org_id: int
         """
-        return self.filter()
+
+        query = '''
+                WITH RECURSIVE parents AS (
+                SELECT orgunits_organization.id, orgunits_organization.parent_id, 0 AS relative_depth
+                FROM orgunits_organization
+                WHERE id = %s
+
+                UNION ALL
+
+                SELECT orgunits_organization.id, orgunits_organization.parent_id, parents.relative_depth - 1
+                FROM orgunits_organization,parents
+                WHERE orgunits_organization.id = parents.parent_id
+                )
+                SELECT id
+                FROM parents
+                '''
+
+        return self.filter(pk__in=RawSQL(query, [child_org_id]))
 
 
 class Organization(models.Model):
@@ -42,6 +71,9 @@ class Organization(models.Model):
         verbose_name_plural = "Организация"
         verbose_name = "Организации"
 
+    def __str__(self):
+        return self.name
+
     def parents(self):
         """
         Возвращает всех родителей любого уровня вложенности
@@ -50,6 +82,8 @@ class Organization(models.Model):
         :rtype: django.db.models.QuerySet
         """
 
+        return Organization.objects.tree_upwards(self.id).exclude(pk=self.id)
+
     def children(self):
         """
         Возвращает всех детей любого уровня вложенности
@@ -57,3 +91,5 @@ class Organization(models.Model):
 
         :rtype: django.db.models.QuerySet
         """
+
+        return Organization.objects.tree_downwards(self.id).exclude(pk=self.id)
